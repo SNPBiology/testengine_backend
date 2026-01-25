@@ -30,6 +30,8 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
+      'https://snpexamprep.com',
+      'https://www.snpexamprep.com',
       'http://snpexamprep.com',
       'http://www.snpexamprep.com',
       process.env.CLIENT_URL
