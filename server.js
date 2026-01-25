@@ -30,8 +30,8 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
-      'http://localhost:5173',
-      'http://localhost:5174',
+      'http://snpexamprep.com',
+      'http://www.snpexamprep.com',
       process.env.CLIENT_URL
     ].filter(Boolean);
 
