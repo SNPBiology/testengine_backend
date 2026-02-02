@@ -10,7 +10,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
  * @returns {Promise} Resend API response
  */
 export const sendOTPEmail = async (email, firstName, otp) => {
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -65,25 +65,25 @@ export const sendOTPEmail = async (email, firstName, otp) => {
     </html>
   `;
 
-    try {
-        const response = await resend.emails.send({
-            from: process.env.RESEND_FROM_EMAIL,
-            to: email,
-            subject: '🔐 Verify Your Email - SNP Exam Prep',
-            html
-        });
+  try {
+    const response = await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL,
+      to: email,
+      subject: '🔐 Verify Your Email - SNP Exam Prep',
+      html
+    });
 
-        return {
-            success: true,
-            data: response
-        };
-    } catch (error) {
-        console.error('Resend email error:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
+    return {
+      success: true,
+      data: response
+    };
+  } catch (error) {
+    console.error('Resend email error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 };
 
 /**
@@ -92,7 +92,11 @@ export const sendOTPEmail = async (email, firstName, otp) => {
  * @param {string} firstName - User's first name
  */
 export const sendWelcomeEmail = async (email, firstName) => {
-    const html = `
+  // Get production URL (prefer snpexamprep.com over localhost)
+  const urls = process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',').map(url => url.trim()) : [];
+  const clientUrl = urls.find(url => url.includes('snpexamprep.com')) || 'https://snpexamprep.com';
+
+  const html = `
     <!DOCTYPE html>
     <html>
     <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
@@ -100,7 +104,7 @@ export const sendWelcomeEmail = async (email, firstName) => {
         <h2 style="color: #667eea;">Welcome to SNP Exam Prep, ${firstName}! 🎉</h2>
         <p>Your account has been successfully verified and activated.</p>
         <p>You can now access all features and start your NEET preparation journey!</p>
-        <a href="${process.env.CLIENT_URL}/login" style="display: inline-block; background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin-top: 20px;">
+        <a href="${clientUrl}/login" style="display: inline-block; background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin-top: 20px;">
           Start Learning
         </a>
       </div>
@@ -108,15 +112,15 @@ export const sendWelcomeEmail = async (email, firstName) => {
     </html>
   `;
 
-    try {
-        await resend.emails.send({
-            from: process.env.RESEND_FROM_EMAIL,
-            to: email,
-            subject: '🎉 Welcome to SNP Exam Prep!',
-            html
-        });
-    } catch (error) {
-        console.error('Welcome email error:', error);
-        // Don't throw error - welcome email is not critical
-    }
+  try {
+    await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL,
+      to: email,
+      subject: '🎉 Welcome to SNP Exam Prep!',
+      html
+    });
+  } catch (error) {
+    console.error('Welcome email error:', error);
+    // Don't throw error - welcome email is not critical
+  }
 };
