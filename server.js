@@ -60,7 +60,12 @@ app.use(helmet({
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 app.use(cookieParser()); // Parse cookies
-app.use(morgan('dev')); // Logging
+// Configure logging based on environment
+if (process.env.NODE_ENV === 'production') {
+  app.use(morgan('tiny')); // Minimal production logging
+} else {
+  app.use(morgan('dev')); // Detailed development logging
+}
 
 // Health check route
 app.get('/api/health', (req, res) => {
