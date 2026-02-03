@@ -29,12 +29,15 @@ const PORT = process.env.PORT || 5000;
 // Configure CORS first (before helmet)
 app.use(cors({
   origin: (origin, callback) => {
+    // Split CLIENT_URL by comma to handle multiple origins
+    const clientUrls = process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',').map(url => url.trim()) : [];
+
     const allowedOrigins = [
       'https://snpexamprep.com',
       'https://www.snpexamprep.com',
       'http://snpexamprep.com',
       'http://www.snpexamprep.com',
-      process.env.CLIENT_URL
+      ...clientUrls
     ].filter(Boolean);
 
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -43,6 +46,8 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
+      console.log(`CORS blocked origin: ${origin}`);
+      console.log('Allowed origins:', allowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
