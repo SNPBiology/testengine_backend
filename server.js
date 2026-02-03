@@ -46,8 +46,11 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log(`CORS blocked origin: ${origin}`);
-      console.log('Allowed origins:', allowedOrigins);
+      // Log CORS issues only in development
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`CORS blocked origin: ${origin}`);
+        console.log('Allowed origins:', allowedOrigins);
+      }
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -115,9 +118,13 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🌐 API URL: http://localhost:${PORT}/api`);
+  if (process.env.NODE_ENV === 'production') {
+    console.log(`Server running on port ${PORT}`);
+  } else {
+    console.log(`🚀 Server is running on port ${PORT}`);
+    console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🌐 API URL: http://localhost:${PORT}/api`);
+  }
 });
 
 export default app;
