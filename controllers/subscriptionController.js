@@ -605,12 +605,44 @@ export const createRazorpayOrder = async (req, res) => {
             }
         }
 
-        // Create Razorpay order
+        // Calculate upgrade cost if user has active subscription
+        let finalAmount = plan.price;
+        let upgradeInfo = null;
+
+        if (currentSubscription && currentSubscription.payment_plans) {
+            const currentPrice = currentSubscription.payment_plans.price;
+            const priceDifference = plan.price - currentPrice;
+
+            // Only charge the difference for upgrades
+            if (priceDifference > 0) {
+                finalAmount = priceDifference;
+                upgradeInfo = {
+                    isUpgrade: true,
+                    currentPlanName: currentSubscription.payment_plans.plan_name,
+                    currentPlanPrice: currentPrice,
+                    newPlanPrice: plan.price,
+                    upgradeCharge: priceDifference
+                };
+
+                console.log('Upgrade pricing applied:', {
+                    from: currentSubscription.payment_plans.plan_name,
+                    to: plan.plan_name,
+                    originalPrice: plan.price,
+                    currentPlanPrice: currentPrice,
+                    upgradeCost: finalAmount
+                });
+            }
+        }
+
+        // Create Razorpay order with upgrade pricing
         const orderResult = await razorpayService.createOrder(
-            plan.price,
+            finalAmount,
             plan.plan_name,
             userId,
-            { plan_id: planId }
+            {
+                plan_id: planId,
+                ...(upgradeInfo || {})
+            }
         );
 
         if (!orderResult.success) {
@@ -630,10 +662,13 @@ export const createRazorpayOrder = async (req, res) => {
                 plan_id: planId,
                 transaction_reference: order.id,
                 razorpay_order_id: order.id,
-                amount: plan.price,
+                amount: finalAmount,
                 payment_method: 'card', // Will be updated after payment
                 transaction_status: 'pending',
-                payment_gateway_response: JSON.stringify(order)
+                payment_gateway_response: JSON.stringify({
+                    ...order,
+                    upgrade_metadata: upgradeInfo
+                })
             })
             .select()
             .single();
@@ -655,8 +690,20 @@ export const createRazorpayOrder = async (req, res) => {
                 currency: order.currency,
                 keyId: process.env.RAZORPAY_KEY_ID,
                 planName: plan.plan_name,
-                description: `${plan.plan_name} - Annual Subscription`,
-                transactionId: transaction.transaction_id
+                description: upgradeInfo
+                    ? `Upgrade to ${plan.plan_name} - Save ₹${plan.price - finalAmount}`
+                    : `${plan.plan_name} - Annual Subscription`,
+                transactionId: transaction.transaction_id,
+                // Upgrade information
+                isUpgrade: !!upgradeInfo,
+                upgradeDetails: upgradeInfo ? {
+                    fromPlan: upgradeInfo.currentPlanName,
+                    toPlan: plan.plan_name,
+                    originalPrice: plan.price,
+                    currentPlanPrice: upgradeInfo.currentPlanPrice,
+                    upgradeCharge: finalAmount,
+                    savings: plan.price - finalAmount
+                } : null
             }
         });
 
