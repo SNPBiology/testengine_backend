@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js';
+import { getUserAccessiblePlanIds } from '../middleware/planAccess.js';
 
 // Get dashboard overview data
 export const getDashboardOverview = async (req, res) => {
@@ -24,9 +25,9 @@ export const getDashboardOverview = async (req, res) => {
       : 0;
 
     const totalCorrect = testAttempts?.reduce((sum, test) => sum + (test.correct_answers || 0), 0) || 0;
-    const totalQuestions = testAttempts?.reduce((sum, test) => 
+    const totalQuestions = testAttempts?.reduce((sum, test) =>
       sum + (test.correct_answers || 0) + (test.incorrect_answers || 0) + (test.unanswered || 0), 0) || 0;
-    
+
     const accuracy = totalQuestions > 0
       ? ((totalCorrect / totalQuestions) * 100).toFixed(1)
       : 0;
@@ -68,6 +69,9 @@ export const getUpcomingTests = async (req, res) => {
     const userId = req.user.userId;
     const currentTime = new Date().toISOString();
 
+    // Get user's accessible plan IDs
+    const { accessiblePlanIds } = await getUserAccessiblePlanIds(userId);
+
     // Fetch published tests that haven't ended yet
     const { data: tests, error } = await supabase
       .from('tests')
@@ -89,6 +93,7 @@ export const getUpcomingTests = async (req, res) => {
         )
       `)
       .eq('is_published', true)
+      .in('required_plan_id', accessiblePlanIds) // Filter by user's accessible plans
       .or(`end_time.is.null,end_time.gt.${currentTime}`)
       .order('start_time', { ascending: true })
       .limit(10);
@@ -240,7 +245,7 @@ export const getSubjectProgress = async (req, res) => {
     // Combine subject data with analytics
     const subjectProgress = subjects?.map(subject => {
       const subjectAnalytics = analyticsMap.get(subject.subject_id);
-      
+
       return {
         name: subject.name,
         subjectCode: subject.subject_code,

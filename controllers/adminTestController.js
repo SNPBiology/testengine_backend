@@ -13,8 +13,7 @@ export const createTest = async (req, res) => {
       durationMinutes,
       totalMarks,
       passingMarks,
-      isFree,
-      price,
+      requiredPlanId,
       testType,
       negativeMarking,
       startTime,
@@ -37,6 +36,15 @@ export const createTest = async (req, res) => {
       });
     }
 
+    // Validate required_plan_id
+    const validPlanIds = [1, 2, 3]; // Free, Premium Annual, Elite Annual
+    if (!validPlanIds.includes(requiredPlanId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid plan ID. Must be 1 (Free), 2 (Premium Annual), or 3 (Elite Annual).'
+      });
+    }
+
     // Prepare metadata if template is provided
     const metadata = templateData ? {
       templateId: templateData.templateId,
@@ -55,8 +63,7 @@ export const createTest = async (req, res) => {
         subject_ids: subjectIds && subjectIds.length > 0 ? subjectIds : null,
         test_name: testName,
         description: description || null,
-        price: isFree ? 0 : price,
-        is_free: isFree,
+        required_plan_id: requiredPlanId,
         duration_minutes: durationMinutes,
         total_questions: 0, // Will be updated when questions are added
         total_marks: totalMarks,
@@ -110,7 +117,15 @@ export const getTestById = async (req, res) => {
 
     const { data: test, error } = await supabase
       .from('tests')
-      .select('*')
+      .select(`
+        *,
+        payment_plans:required_plan_id (
+          plan_id,
+          plan_name,
+          price,
+          description
+        )
+      `)
       .eq('test_id', testId)
       .single();
 
@@ -134,8 +149,8 @@ export const getTestById = async (req, res) => {
         totalQuestions: test.total_questions,
         totalMarks: test.total_marks,
         passingMarks: test.passing_marks,
-        isFree: test.is_free,
-        price: test.price,
+        requiredPlanId: test.required_plan_id,
+        planDetails: test.payment_plans,
         testType: test.test_type,
         negativeMarking: test.negative_marking,
         startTime: test.start_time,
@@ -196,12 +211,16 @@ export const updateTest = async (req, res) => {
     if (updateData.passingMarks !== undefined) {
       dbUpdateData.passing_marks = updateData.passingMarks === '' ? null : updateData.passingMarks;
     }
-    if (updateData.isFree !== undefined) {
-      dbUpdateData.is_free = updateData.isFree;
-      dbUpdateData.price = updateData.isFree ? 0 : (updateData.price === '' ? 0 : updateData.price);
-    }
-    if (updateData.price !== undefined && !updateData.isFree) {
-      dbUpdateData.price = updateData.price === '' ? 0 : updateData.price;
+    if (updateData.requiredPlanId !== undefined) {
+      // Validate plan ID
+      const validPlanIds = [1, 2, 3];
+      if (!validPlanIds.includes(updateData.requiredPlanId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid plan ID. Must be 1 (Free), 2 (Premium Annual), or 3 (Elite Annual).'
+        });
+      }
+      dbUpdateData.required_plan_id = updateData.requiredPlanId;
     }
 
     console.log('=== UPDATE DATA RECEIVED ===');

@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js';
+import { getUserAccessiblePlanIds } from '../middleware/planAccess.js';
 
 // Get all available tests with filters
 export const getAllTests = async (req, res) => {
@@ -14,6 +15,9 @@ export const getAllTests = async (req, res) => {
       offset = 0
     } = req.query;
 
+    // Get user's accessible plan IDs
+    const { planId: userPlanId, accessiblePlanIds } = await getUserAccessiblePlanIds(userId);
+
     // Build query
     let query = supabase
       .from('tests')
@@ -25,8 +29,7 @@ export const getAllTests = async (req, res) => {
         total_questions,
         total_marks,
         test_type,
-        is_free,
-        price,
+        required_plan_id,
         start_time,
         end_time,
         created_at,
@@ -34,9 +37,15 @@ export const getAllTests = async (req, res) => {
           subject_id,
           name,
           subject_code
+        ),
+        payment_plans:required_plan_id (
+          plan_id,
+          plan_name,
+          price
         )
       `)
-      .eq('is_published', true);
+      .eq('is_published', true)
+      .in('required_plan_id', accessiblePlanIds); // Only show tests user can access
 
     // Apply filters (check for valid values, not "undefined" strings)
     if (search && search !== 'undefined' && search.trim() !== '') {
@@ -56,9 +65,7 @@ export const getAllTests = async (req, res) => {
       query = query.eq('test_type', testType);
     }
 
-    if (isFree !== undefined && isFree !== 'undefined') {
-      query = query.eq('is_free', isFree === 'true');
-    }
+
 
     // Order by created date (newest first)
     query = query
@@ -152,8 +159,12 @@ export const getAllTests = async (req, res) => {
         totalMarks: test.total_marks,
         testType: test.test_type,
         testCategory: testCategory,
-        isFree: test.is_free,
-        price: test.price,
+        requiredPlanId: test.required_plan_id,
+        planDetails: test.payment_plans ? {
+          planId: test.payment_plans.plan_id,
+          planName: test.payment_plans.plan_name,
+          price: test.payment_plans.price
+        } : null,
         subject: test.subjects ? {
           id: test.subjects.subject_id,
           name: test.subjects.name,
@@ -169,7 +180,10 @@ export const getAllTests = async (req, res) => {
         totalAttempts: limits.total,
         usedAttempts: limits.used,
         hasAttemptsLeft: hasAttemptsLeft,
-        isUnlimited: limits.remaining === -1
+        isUnlimited: limits.remaining === -1,
+        // Access info
+        userPlanId: userPlanId,
+        hasAccess: true // User can only see tests they have access to
       };
     }) || [];
 
@@ -236,6 +250,9 @@ export const getTestById = async (req, res) => {
     const userId = req.user.userId;
     const { testId } = req.params;
 
+    // Get user's accessible plan IDs
+    const { accessiblePlanIds } = await getUserAccessiblePlanIds(userId);
+
     const { data: test, error } = await supabase
       .from('tests')
       .select(`
@@ -250,6 +267,7 @@ export const getTestById = async (req, res) => {
         passing_marks,
         is_free,
         price,
+        required_plan_id,
         start_time,
         end_time,
         proctoring_settings,
@@ -257,6 +275,11 @@ export const getTestById = async (req, res) => {
           subject_id,
           name,
           subject_code
+        ),
+        payment_plans:required_plan_id (
+          plan_id,
+          plan_name,
+          price
         )
       `)
       .eq('test_id', testId)
@@ -267,6 +290,16 @@ export const getTestById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Test not found'
+      });
+    }
+
+    // Check if user has access to this test based on plan
+    if (!accessiblePlanIds.includes(test.required_plan_id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You need a higher subscription plan to access this test',
+        requiredPlan: test.payment_plans?.plan_name,
+        upgradeRequired: true
       });
     }
 
@@ -309,8 +342,12 @@ export const getTestById = async (req, res) => {
         testType: test.test_type,
         negativeMarking: test.negative_marking,
         passingMarks: test.passing_marks,
-        isFree: test.is_free,
-        price: test.price,
+        requiredPlanId: test.required_plan_id,
+        planDetails: test.payment_plans ? {
+          planId: test.payment_plans.plan_id,
+          planName: test.payment_plans.plan_name,
+          price: test.payment_plans.price
+        } : null,
         startTime: test.start_time,
         endTime: test.end_time,
         proctoringSettings: test.proctoring_settings,
@@ -375,10 +412,13 @@ export const checkTestAccess = async (req, res) => {
     const userId = req.user.userId;
     const { testId } = req.params;
 
+    // Get user's accessible plan IDs
+    const { accessiblePlanIds } = await getUserAccessiblePlanIds(userId);
+
     // Get test details
     const { data: test, error } = await supabase
       .from('tests')
-      .select('is_free, price, start_time, end_time')
+      .select('required_plan_id, start_time, end_time, payment_plans:required_plan_id (plan_name)')
       .eq('test_id', testId)
       .eq('is_published', true)
       .single();
@@ -396,23 +436,14 @@ export const checkTestAccess = async (req, res) => {
       reason: null
     };
 
-    // Check if test is free or user has paid
-    if (!test.is_free) {
-      // Check if user has a valid transaction for this test
-      const { data: transaction } = await supabase
-        .from('transactions')
-        .select('transaction_id')
-        .eq('user_id', userId)
-        .eq('test_id', testId)
-        .eq('transaction_status', 'success')
-        .single();
-
-      if (!transaction) {
-        canAccess.hasAccess = false;
-        canAccess.reason = 'payment_required';
-        canAccess.price = test.price;
-      }
+    // Check if user's plan allows access
+    if (!accessiblePlanIds.includes(test.required_plan_id)) {
+      canAccess.hasAccess = false;
+      canAccess.reason = 'plan_upgrade_required';
+      canAccess.requiredPlan = test.payment_plans?.plan_name;
     }
+
+
 
     // Check if test has started
     if (test.start_time && new Date(test.start_time) > currentTime) {

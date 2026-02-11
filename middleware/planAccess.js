@@ -159,6 +159,46 @@ export const checkTestLimit = (testType) => {
 };
 
 /**
+ * Get user's accessible plan IDs based on their subscription tier
+ * Free (1) can access: [1]
+ * Premium (2) can access: [1, 2]
+ * Elite (3) can access: [1, 2, 3]
+ * @param {number} userId 
+ * @returns {Promise<{planId: number, accessiblePlanIds: number[]}>}
+ */
+export const getUserAccessiblePlanIds = async (userId) => {
+    try {
+        const { data, error } = await supabase
+            .rpc('get_user_active_subscription', { p_user_id: userId });
+
+        if (error) {
+            console.error('Error getting user subscription:', error);
+            // Default to Free plan on error
+            return { planId: 1, accessiblePlanIds: [1] };
+        }
+
+        let userPlanId = 1; // Default to Free plan
+
+        if (data && data.length > 0) {
+            userPlanId = data[0].plan_id;
+        }
+
+        // Generate array of accessible plan IDs
+        // User can access their plan and all lower tiers
+        const accessiblePlanIds = [];
+        for (let i = 1; i <= userPlanId; i++) {
+            accessiblePlanIds.push(i);
+        }
+
+        return { planId: userPlanId, accessiblePlanIds };
+    } catch (error) {
+        console.error('Error in getUserAccessiblePlanIds:', error);
+        // Default to Free plan on error
+        return { planId: 1, accessiblePlanIds: [1] };
+    }
+};
+
+/**
  * Helper function to get user's plan features
  * Can be used in controllers without middleware
  */
@@ -193,5 +233,6 @@ export default {
     requirePlan,
     requireFeature,
     checkTestLimit,
-    getUserPlanFeatures
+    getUserPlanFeatures,
+    getUserAccessiblePlanIds
 };

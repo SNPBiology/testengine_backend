@@ -137,8 +137,7 @@ export const getRecentTests = async (req, res) => {
           duration: test.duration_minutes,
           totalQuestions: questionCount || 0,
           totalMarks: test.total_marks,
-          isFree: test.is_free,
-          price: test.price,
+          requiredPlanId: test.required_plan_id || 1, // Default to Free if null
           isActive: test.is_published,
           attemptCount: attemptCount || 0,
           createdAt: test.created_at
@@ -530,8 +529,7 @@ export const getAllTests = async (req, res) => {
           duration: test.duration_minutes,
           totalQuestions: questionCount || 0,
           totalMarks: test.total_marks,
-          isFree: test.is_free,
-          price: test.price,
+          requiredPlanId: test.required_plan_id || 1, // Default to Free if null
           isActive: test.is_published,
           attemptCount: attemptCount || 0,
           createdAt: test.created_at
