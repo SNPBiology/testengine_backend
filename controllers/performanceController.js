@@ -19,7 +19,7 @@ export const getOverallPerformance = async (req, res) => {
     // Build query for test attempts
     let query = supabase
       .from('test_attempts')
-      .select('*')
+      .select('*, tests(total_marks)')
       .eq('user_id', userId)
       .eq('attempt_status', 'completed');
 
@@ -36,24 +36,25 @@ export const getOverallPerformance = async (req, res) => {
 
     // Calculate statistics
     const testsCompleted = attempts?.length || 0;
-    
+
     const totalMarks = attempts?.reduce((sum, a) => sum + parseFloat(a.total_marks_obtained || 0), 0) || 0;
     const totalPossible = attempts?.reduce((sum, a) => {
-      // Assuming each test has total_marks field, or calculate from questions
-      return sum + 720; // Default NEET marks, should be dynamic
-    }, 0) || 1;
-    
+      return sum + parseFloat(a.tests?.total_marks || 0);
+    }, 0) || 0;
+
+    // Average score per test and average total marks per test
+    const avgTotalPerTest = testsCompleted > 0 ? (totalPossible / testsCompleted) : 0;
     const overallScore = testsCompleted > 0 ? (totalMarks / testsCompleted).toFixed(2) : 0;
-    const overallPercentage = testsCompleted > 0 
-      ? ((totalMarks / totalPossible) * 100).toFixed(2) 
+    const overallPercentage = totalPossible > 0
+      ? ((totalMarks / totalPossible) * 100).toFixed(2)
       : 0;
 
     const totalCorrect = attempts?.reduce((sum, a) => sum + (a.correct_answers || 0), 0) || 0;
-    const totalQuestions = attempts?.reduce((sum, a) => 
+    const totalQuestions = attempts?.reduce((sum, a) =>
       sum + (a.correct_answers || 0) + (a.incorrect_answers || 0) + (a.unanswered || 0), 0) || 0;
-    
-    const accuracy = totalQuestions > 0 
-      ? ((totalCorrect / totalQuestions) * 100).toFixed(1) 
+
+    const accuracy = totalQuestions > 0
+      ? ((totalCorrect / totalQuestions) * 100).toFixed(1)
       : 0;
 
     // Calculate average time per question
@@ -69,7 +70,7 @@ export const getOverallPerformance = async (req, res) => {
       : 0;
 
     // Get rank (simplified - based on best score)
-    const bestScore = attempts?.length > 0 
+    const bestScore = attempts?.length > 0
       ? Math.max(...attempts.map(a => parseFloat(a.percentage || 0)))
       : 0;
 
@@ -87,7 +88,7 @@ export const getOverallPerformance = async (req, res) => {
       .select('user_id', { count: 'exact', head: true })
       .eq('attempt_status', 'completed');
 
-    const percentile = totalStudents > 0 
+    const percentile = totalStudents > 0
       ? (((totalStudents - rank) / totalStudents) * 100).toFixed(0)
       : 0;
 
@@ -95,7 +96,8 @@ export const getOverallPerformance = async (req, res) => {
       success: true,
       data: {
         score: parseFloat(overallScore),
-        total: 720,
+        total: parseFloat(avgTotalPerTest.toFixed(1)),
+        totalPossible: parseFloat(totalPossible.toFixed(1)),
         percentage: parseFloat(overallPercentage),
         percentile: parseInt(percentile),
         rank,
@@ -142,7 +144,7 @@ export const getSubjectPerformance = async (req, res) => {
     // Format subject performance
     const subjectPerformance = await Promise.all(subjects?.map(async (subject) => {
       const subjectAnalytics = analyticsMap.get(subject.subject_id);
-      
+
       // Get recent tests for this subject
       const { data: recentTests } = await supabase
         .from('test_attempts')
@@ -173,9 +175,9 @@ export const getSubjectPerformance = async (req, res) => {
         score: subjectAnalytics?.average_score || 0,
         total: 180, // Standard subject marks
         progress: subjectAnalytics?.average_score || 0,
-        accuracy: subjectAnalytics ? 
-          ((subjectAnalytics.total_correct_answers / 
-            (subjectAnalytics.total_correct_answers + subjectAnalytics.total_incorrect_answers)) * 100).toFixed(1) 
+        accuracy: subjectAnalytics ?
+          ((subjectAnalytics.total_correct_answers /
+            (subjectAnalytics.total_correct_answers + subjectAnalytics.total_incorrect_answers)) * 100).toFixed(1)
           : 0,
         trend,
         testsAttempted: subjectAnalytics?.total_tests_attempted || 0,
@@ -229,7 +231,7 @@ export const getProgressOverTime = async (req, res) => {
 
     attempts?.forEach(attempt => {
       const date = new Date(attempt.submit_time);
-      const key = timeRange === 'week' 
+      const key = timeRange === 'week'
         ? `${date.getMonth() + 1}/${date.getDate()}`
         : date.toLocaleDateString('en-US', { month: 'short' });
 
