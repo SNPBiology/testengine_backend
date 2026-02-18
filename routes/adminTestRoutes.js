@@ -16,7 +16,10 @@ import {
   deleteQuestion,
   uploadQuestionImage,
   getQuestionMedia,
-  deleteQuestionMedia
+  deleteQuestionMedia,
+  getTestsForImport,
+  getQuestionsForImport,
+  importQuestionsFromTest
 } from '../controllers/questionController.js';
 import { generateQuestionsFromTemplate } from '../controllers/templateActionController.js';
 
@@ -122,6 +125,27 @@ router.get('/:testId/questions/:questionId/media', getQuestionMedia);
  * @access  Private (Admin only)
  */
 router.delete('/:testId/questions/:questionId/media/:mediaId', deleteQuestionMedia);
+
+/**
+ * @route   GET /api/test/:testId/import/tests
+ * @desc    Get all tests available as import sources
+ * @access  Private (Admin only)
+ */
+router.get('/:testId/import/tests', getTestsForImport);
+
+/**
+ * @route   GET /api/test/:testId/import/source/:sourceTestId/questions
+ * @desc    Get questions from a source test for preview
+ * @access  Private (Admin only)
+ */
+router.get('/:testId/import/source/:sourceTestId/questions', getQuestionsForImport);
+
+/**
+ * @route   POST /api/test/:testId/import/questions
+ * @desc    Import (copy) selected questions into the target test
+ * @access  Private (Admin only)
+ */
+router.post('/:testId/import/questions', importQuestionsFromTest);
 
 export default router;
 

@@ -628,3 +628,324 @@ export const deleteQuestionMedia = async (req, res) => {
 };
 
 
+/**
+ * Get all tests available as import sources (for the import modal)
+ */
+export const getTestsForImport = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { testId: currentTestId } = req.params;
+
+    // Verify user is admin
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('user_id', userId)
+      .single();
+
+    if (userError || !userData || userData.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    // Get all tests except the current one
+    const { data: tests, error: testsError } = await supabase
+      .from('tests')
+      .select('test_id, test_name, total_questions, created_at')
+      .neq('test_id', currentTestId)
+      .order('created_at', { ascending: false });
+
+    if (testsError) throw testsError;
+
+    // Get question counts for each test
+    const testsWithCounts = await Promise.all(
+      tests.map(async (test) => {
+        const { count } = await supabase
+          .from('test_questions')
+          .select('*', { count: 'exact', head: true })
+          .eq('test_id', test.test_id);
+
+        return {
+          testId: test.test_id,
+          testName: test.test_name,
+          questionCount: count || 0,
+          createdAt: test.created_at
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: testsWithCounts
+    });
+
+  } catch (error) {
+    console.error('Error fetching tests for import:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch tests',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get questions from a source test (for the import modal preview)
+ */
+export const getQuestionsForImport = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { sourceTestId } = req.params;
+
+    // Verify user is admin
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('user_id', userId)
+      .single();
+
+    if (userError || !userData || userData.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    // Get test questions
+    const { data: testQuestions, error: testQuestionsError } = await supabase
+      .from('test_questions')
+      .select('question_id, question_order, marks_allocated, negative_marks_allocated')
+      .eq('test_id', sourceTestId)
+      .order('question_order');
+
+    if (testQuestionsError) throw testQuestionsError;
+
+    if (!testQuestions || testQuestions.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const questionIds = testQuestions.map(tq => tq.question_id);
+
+    // Get question details
+    const { data: questions, error: questionsError } = await supabase
+      .from('questions')
+      .select('*')
+      .in('question_id', questionIds);
+
+    if (questionsError) throw questionsError;
+
+    // Get options
+    const { data: options, error: optionsError } = await supabase
+      .from('question_options')
+      .select('*')
+      .in('question_id', questionIds)
+      .order('option_order');
+
+    if (optionsError) throw optionsError;
+
+    const questionsWithOptions = testQuestions.map(tq => {
+      const question = questions.find(q => q.question_id === tq.question_id);
+      const questionOptions = options.filter(o => o.question_id === tq.question_id);
+
+      return {
+        questionId: question.question_id,
+        questionText: question.question_text,
+        questionType: question.question_type,
+        questionCategory: question.question_category,
+        difficultyLevel: question.difficulty_level,
+        marks: tq.marks_allocated,
+        negativeMarks: tq.negative_marks_allocated,
+        explanation: question.explanation,
+        metadata: question.metadata,
+        order: tq.question_order,
+        options: questionOptions.map(opt => ({
+          optionId: opt.option_id,
+          text: opt.option_text,
+          isCorrect: opt.is_correct,
+          order: opt.option_order
+        }))
+      };
+    });
+
+    res.json({
+      success: true,
+      data: questionsWithOptions
+    });
+
+  } catch (error) {
+    console.error('Error fetching questions for import:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch questions',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Import (copy) selected questions from a source test into the target test
+ */
+export const importQuestionsFromTest = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { testId: targetTestId } = req.params;
+    const { questionIds } = req.body; // array of question_ids to copy
+
+    // Verify user is admin
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('user_id', userId)
+      .single();
+
+    if (userError || !userData || userData.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    if (!questionIds || questionIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No questions selected for import.'
+      });
+    }
+
+    // Get the source questions data
+    const { data: sourceQuestions, error: sourceQuestionsError } = await supabase
+      .from('questions')
+      .select('*')
+      .in('question_id', questionIds);
+
+    if (sourceQuestionsError) throw sourceQuestionsError;
+
+    // Get options for source questions
+    const { data: sourceOptions, error: sourceOptionsError } = await supabase
+      .from('question_options')
+      .select('*')
+      .in('question_id', questionIds)
+      .order('option_order');
+
+    if (sourceOptionsError) throw sourceOptionsError;
+
+    // Get the marks info from test_questions for the source questions
+    // We'll use the first test that has these questions as the source marks reference
+    const { data: sourceTestQuestions, error: stqError } = await supabase
+      .from('test_questions')
+      .select('question_id, marks_allocated, negative_marks_allocated')
+      .in('question_id', questionIds);
+
+    if (stqError) throw stqError;
+
+    // Get current max order in target test
+    const { data: maxOrderData } = await supabase
+      .from('test_questions')
+      .select('question_order')
+      .eq('test_id', targetTestId)
+      .order('question_order', { ascending: false })
+      .limit(1);
+
+    let nextOrder = maxOrderData && maxOrderData.length > 0
+      ? maxOrderData[0].question_order + 1
+      : 1;
+
+    // Copy each question
+    let importedCount = 0;
+    for (const sourceQ of sourceQuestions) {
+      // Create a new question row (copy)
+      const { data: newQuestion, error: newQError } = await supabase
+        .from('questions')
+        .insert([{
+          subject_id: sourceQ.subject_id,
+          created_by: userId,
+          question_text: sourceQ.question_text,
+          question_type: sourceQ.question_type,
+          question_category: sourceQ.question_category,
+          difficulty_level: sourceQ.difficulty_level,
+          marks: sourceQ.marks,
+          negative_marks: sourceQ.negative_marks,
+          explanation: sourceQ.explanation,
+          metadata: sourceQ.metadata,
+          is_active: true
+        }])
+        .select('question_id')
+        .single();
+
+      if (newQError) throw newQError;
+
+      const newQuestionId = newQuestion.question_id;
+
+      // Copy options for this question
+      const qOptions = sourceOptions.filter(o => o.question_id === sourceQ.question_id);
+      if (qOptions.length > 0) {
+        const newOptionsData = qOptions.map(opt => ({
+          question_id: newQuestionId,
+          option_text: opt.option_text,
+          is_correct: opt.is_correct,
+          option_order: opt.option_order
+        }));
+
+        const { error: optInsertError } = await supabase
+          .from('question_options')
+          .insert(newOptionsData);
+
+        if (optInsertError) throw optInsertError;
+      }
+
+      // Find marks info for this question from source
+      const srcTQ = sourceTestQuestions.find(stq => stq.question_id === sourceQ.question_id);
+      const marksAllocated = srcTQ ? srcTQ.marks_allocated : (sourceQ.marks || 4);
+      const negMarksAllocated = srcTQ ? srcTQ.negative_marks_allocated : (sourceQ.negative_marks || 0);
+
+      // Link new question to target test
+      const { error: linkError } = await supabase
+        .from('test_questions')
+        .insert([{
+          test_id: targetTestId,
+          question_id: newQuestionId,
+          question_order: nextOrder,
+          marks_allocated: marksAllocated,
+          negative_marks_allocated: negMarksAllocated
+        }]);
+
+      if (linkError) throw linkError;
+
+      nextOrder++;
+      importedCount++;
+    }
+
+    // Update total_questions count on the target test
+    const { data: questionCount } = await supabase
+      .from('test_questions')
+      .select('question_id', { count: 'exact' })
+      .eq('test_id', targetTestId);
+
+    if (questionCount) {
+      await supabase
+        .from('tests')
+        .update({
+          total_questions: questionCount.length,
+          updated_at: new Date().toISOString()
+        })
+        .eq('test_id', targetTestId);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `${importedCount} question(s) imported successfully`,
+      data: { importedCount }
+    });
+
+  } catch (error) {
+    console.error('Error importing questions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to import questions',
+      error: error.message
+    });
+  }
+};
+
