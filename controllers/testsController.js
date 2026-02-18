@@ -83,20 +83,27 @@ export const getAllTests = async (req, res) => {
     const testIds = tests?.map(t => t.test_id) || [];
     const { data: userAttempts } = await supabase
       .from('test_attempts')
-      .select('test_id, total_marks_obtained, percentage')
+      .select('attempt_id, test_id, total_marks_obtained, percentage, submit_time')
       .eq('user_id', userId)
       .in('test_id', testIds)
-      .eq('attempt_status', 'completed');
+      .eq('attempt_status', 'completed')
+      .order('submit_time', { ascending: false });
 
-    // Create a map of user's best scores
+    // Create a map of user's best scores (and latest attempt for review link)
     const userScoresMap = new Map();
+    const latestAttemptMap = new Map(); // test_id -> most recent attempt_id
     userAttempts?.forEach(attempt => {
+      // Track best score
       const existing = userScoresMap.get(attempt.test_id);
       if (!existing || attempt.percentage > existing.percentage) {
         userScoresMap.set(attempt.test_id, {
           score: attempt.total_marks_obtained,
           percentage: attempt.percentage
         });
+      }
+      // Track latest attempt (already ordered desc by submit_time)
+      if (!latestAttemptMap.has(attempt.test_id)) {
+        latestAttemptMap.set(attempt.test_id, attempt.attempt_id);
       }
     });
 
@@ -174,6 +181,7 @@ export const getAllTests = async (req, res) => {
         endTime: test.end_time,
         attempts: attemptsCountMap.get(test.test_id) || 0,
         userBestScore: userScoresMap.get(test.test_id) || null,
+        latestAttemptId: latestAttemptMap.get(test.test_id) || null,
         hasAttempted: userScoresMap.has(test.test_id),
         // Subscription limits
         remainingAttempts: limits.remaining,
@@ -472,7 +480,7 @@ export const checkTestAccess = async (req, res) => {
   }
 };
 
-// Get test attempt result for review
+// Get test attempt result for review (with full answer key)
 export const getAttemptResult = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -507,24 +515,149 @@ export const getAttemptResult = async (req, res) => {
       });
     }
 
-    // Format the response
-    const result = {
-      attemptId: attempt.attempt_id,
-      testId: attempt.test_id,
-      testName: attempt.tests?.test_name || 'Test',
-      score: parseFloat(attempt.total_marks_obtained || 0).toFixed(1),
-      totalPossible: attempt.tests?.total_marks || 0,
-      percentage: parseFloat(attempt.percentage || 0).toFixed(2),
-      correct: attempt.correct_answers || 0,
-      incorrect: attempt.incorrect_answers || 0,
-      unanswered: attempt.unanswered || 0,
-      submitTime: attempt.submit_time,
-      totalQuestions: attempt.tests?.total_questions || 0
-    };
+    // ── Fetch per-question answer key ──────────────────────────────────────
+
+    // 1. Get user's answers for this attempt
+    const { data: userAnswers = [] } = await supabase
+      .from('attempt_answers')
+      .select('question_id, selected_option_id, is_correct, marks_obtained')
+      .eq('attempt_id', attemptId);
+
+    // 2. Get all test_questions for this test (ordered)
+    const { data: testQuestions = [] } = await supabase
+      .from('test_questions')
+      .select('question_id, question_order, marks_allocated, negative_marks_allocated')
+      .eq('test_id', attempt.test_id)
+      .order('question_order', { ascending: true });
+
+    const questionIds = testQuestions.map(tq => tq.question_id);
+
+    if (questionIds.length === 0) {
+      // No questions — return summary only
+      return res.status(200).json({
+        success: true,
+        data: {
+          attemptId: attempt.attempt_id,
+          testId: attempt.test_id,
+          testName: attempt.tests?.test_name || 'Test',
+          score: parseFloat(attempt.total_marks_obtained || 0).toFixed(1),
+          totalPossible: attempt.tests?.total_marks || 0,
+          percentage: parseFloat(attempt.percentage || 0).toFixed(2),
+          correct: attempt.correct_answers || 0,
+          incorrect: attempt.incorrect_answers || 0,
+          unanswered: attempt.unanswered || 0,
+          submitTime: attempt.submit_time,
+          totalQuestions: attempt.tests?.total_questions || 0,
+          questions: []
+        }
+      });
+    }
+
+    // 3. Get question details (text, explanation, category, difficulty)
+    const { data: questions = [] } = await supabase
+      .from('questions')
+      .select('question_id, question_text, question_type, question_category, difficulty_level, explanation, metadata')
+      .in('question_id', questionIds);
+
+    // 4. Get all options for these questions
+    const { data: allOptions = [] } = await supabase
+      .from('question_options')
+      .select('option_id, question_id, option_text, is_correct, option_order')
+      .in('question_id', questionIds)
+      .order('option_order', { ascending: true });
+
+    // 5. Get question media (images)
+    const { data: allMedia = [] } = await supabase
+      .from('question_media')
+      .select('media_id, question_id, file_path, media_type, file_name')
+      .in('question_id', questionIds);
+
+    // Build media URLs
+    const mediaMap = new Map();
+    for (const m of allMedia) {
+      if (!m.file_path) continue;
+      const { data: urlData } = supabase.storage
+        .from('question-images')
+        .getPublicUrl(m.file_path);
+      if (urlData?.publicUrl) {
+        if (!mediaMap.has(m.question_id)) mediaMap.set(m.question_id, []);
+        mediaMap.get(m.question_id).push({
+          mediaId: m.media_id,
+          url: urlData.publicUrl,
+          type: m.media_type,
+          fileName: m.file_name
+        });
+      }
+    }
+
+    // Build lookup maps
+    const questionsMap = new Map(questions.map(q => [q.question_id, q]));
+    const optionsMap = new Map();
+    for (const opt of allOptions) {
+      if (!optionsMap.has(opt.question_id)) optionsMap.set(opt.question_id, []);
+      optionsMap.get(opt.question_id).push(opt);
+    }
+    const userAnswersMap = new Map(userAnswers.map(a => [a.question_id, a]));
+
+    // 6. Build per-question answer key
+    const questionsWithAnswerKey = testQuestions.map((tq, idx) => {
+      const q = questionsMap.get(tq.question_id);
+      const options = optionsMap.get(tq.question_id) || [];
+      const userAnswer = userAnswersMap.get(tq.question_id);
+      const media = mediaMap.get(tq.question_id) || [];
+
+      const correctOption = options.find(o => o.is_correct);
+      const selectedOption = userAnswer?.selected_option_id
+        ? options.find(o => o.option_id === userAnswer.selected_option_id)
+        : null;
+
+      // Determine status
+      let status = 'unattempted';
+      if (userAnswer?.selected_option_id != null) {
+        status = userAnswer.is_correct ? 'correct' : 'incorrect';
+      }
+
+      return {
+        questionNumber: idx + 1,
+        questionId: tq.question_id,
+        questionText: q?.question_text || '',
+        questionType: q?.question_type || 'mcq',
+        questionCategory: q?.question_category || '',
+        difficultyLevel: q?.difficulty_level || '',
+        explanation: q?.explanation || null,
+        metadata: q?.metadata || {},
+        marksAllocated: tq.marks_allocated,
+        negativeMarks: tq.negative_marks_allocated,
+        marksObtained: userAnswer?.marks_obtained ?? 0,
+        status, // 'correct' | 'incorrect' | 'unattempted'
+        options: options.map(opt => ({
+          optionId: opt.option_id,
+          text: opt.option_text,
+          isCorrect: opt.is_correct,
+          isSelected: opt.option_id === userAnswer?.selected_option_id
+        })),
+        correctOptionId: correctOption?.option_id ?? null,
+        selectedOptionId: userAnswer?.selected_option_id ?? null,
+        media
+      };
+    });
 
     res.status(200).json({
       success: true,
-      data: result
+      data: {
+        attemptId: attempt.attempt_id,
+        testId: attempt.test_id,
+        testName: attempt.tests?.test_name || 'Test',
+        score: parseFloat(attempt.total_marks_obtained || 0).toFixed(1),
+        totalPossible: attempt.tests?.total_marks || 0,
+        percentage: parseFloat(attempt.percentage || 0).toFixed(2),
+        correct: attempt.correct_answers || 0,
+        incorrect: attempt.incorrect_answers || 0,
+        unanswered: attempt.unanswered || 0,
+        submitTime: attempt.submit_time,
+        totalQuestions: attempt.tests?.total_questions || 0,
+        questions: questionsWithAnswerKey
+      }
     });
   } catch (error) {
     console.error('Get attempt result error:', error);
