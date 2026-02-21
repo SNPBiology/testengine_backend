@@ -254,20 +254,15 @@ export const updateStudentProfile = async (req, res) => {
 export const updateProfilePicture = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { profilePicture } = req.body;
+    // Allow empty string to clear the avatar (revert to initials) — store NULL
+    const profilePicture = req.body.profilePicture ?? null;
+    const valueToStore = (profilePicture === '' || profilePicture === null) ? null : profilePicture;
 
-    if (!profilePicture) {
-      return res.status(400).json({
-        success: false,
-        message: 'Profile picture URL is required'
-      });
-    }
-
-    // Update student profile with new picture
+    // Update student profile with new picture (or null to clear)
     const { data, error } = await supabase
       .from('student_profiles')
       .update({
-        profile_picture: profilePicture,
+        profile_picture: valueToStore,
         updated_at: new Date().toISOString()
       })
       .eq('user_id', userId)
@@ -442,6 +437,48 @@ export const deleteAccount = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while deleting account'
+    });
+  }
+};
+// Get list of available avatars from Supabase Storage bucket
+export const getAvatarList = async (req, res) => {
+  try {
+    const BUCKET_NAME = 'avatars';
+
+    const { data: files, error } = await supabase.storage
+      .from(BUCKET_NAME)
+      .list('', {
+        limit: 100,
+        offset: 0,
+        sortBy: { column: 'name', order: 'asc' }
+      });
+
+    if (error) {
+      console.error('Error listing avatars:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch avatar list'
+      });
+    }
+
+    // Filter out placeholder/folder files and build public URLs
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const avatars = (files || [])
+      .filter(f => f.name && !f.name.startsWith('.') && f.metadata)
+      .map(f => ({
+        filename: f.name,
+        url: `${supabaseUrl}/storage/v1/object/public/${BUCKET_NAME}/${f.name}`
+      }));
+
+    res.status(200).json({
+      success: true,
+      data: avatars
+    });
+  } catch (error) {
+    console.error('Get avatar list error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching avatars'
     });
   }
 };

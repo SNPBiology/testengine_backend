@@ -5,7 +5,8 @@ import {
   updateStudentProfile,
   updateProfilePicture,
   changePassword,
-  deleteAccount
+  deleteAccount,
+  getAvatarList
 } from '../controllers/profileController.js';
 import { authenticate } from '../middleware/auth.js';
 import { body } from 'express-validator';
@@ -18,6 +19,9 @@ router.use(authenticate);
 
 // Get student profile
 router.get('/', getStudentProfile);
+
+// Get available avatars from storage bucket
+router.get('/avatars', getAvatarList);
 
 // Update user basic information
 router.put(
@@ -54,11 +58,11 @@ router.put(
   updateStudentProfile
 );
 
-// Update profile picture
+// Update profile picture (empty string allowed to clear/revert to initials)
 router.put(
   '/picture',
   [
-    body('profilePicture').trim().notEmpty().withMessage('Profile picture URL is required')
+    body('profilePicture').optional({ values: 'undefined' }).trim()
   ],
   handleValidationErrors,
   updateProfilePicture
